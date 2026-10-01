@@ -472,6 +472,7 @@ function drawDemoStorms(){
     const slat=s.lat+s.vy*dt/111000, slon=s.lon+s.vx*dt/(111320*Math.cos(rad(s.lat)));
     const {x,y}=proj(slat,slon);
     const rp=s.r/(111320*Math.cos(rad(slat)))*pxPerDegLon;   // rayon en px (CORRIGÉ)
+    if(!isFinite(x)||!isFinite(y)||!isFinite(rp)||rp<=0) continue;
     const g=ctx.createRadialGradient(x,y,rp*0.1,x,y,rp);
     g.addColorStop(0,"rgba(255,215,0,.60)"); g.addColorStop(.45,"rgba(255,120,0,.50)");
     g.addColorStop(.8,"rgba(60,200,60,.35)"); g.addColorStop(1,"rgba(0,0,0,0)");
@@ -633,7 +634,10 @@ function proj(lat,lon){
 function draw(){
   const dpr=window.devicePixelRatio||1;
   const w=cvs.clientWidth*dpr, h=cvs.clientHeight*dpr;
-  if(cvs.width!==w||cvs.height!==h){cvs.width=w;cvs.height=h;}
+  if(w<10||h<10||!isFinite(w)||!isFinite(h)) return;   // canvas invisible/vide : ne rien dessiner
+  if(cvs.width!==Math.round(w)||cvs.height!==Math.round(h)){
+    cvs.width=Math.round(w); cvs.height=Math.round(h);
+  }
   ctx.imageSmoothingEnabled=false;
   if(S.scope){ drawScope(); updateHud(); return; }
   drawBase(); drawRadar();
@@ -689,7 +693,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v1.3";
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v1.4";
   $("stRight").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Alerte principale
   if(S.mode==="idle"){ return; }
@@ -715,20 +719,26 @@ function updateHud(){
    7) BOUCLE & INTERACTIONS
    ========================================================================= */
 let lastT=performance.now();
-let errCount=0;
-function showErr(e){
+let errCount=0, loopAlive=true;
+function showErr(e, fatal){
   const box=$("errBox");
   box.classList.remove("hidden");
-  box.textContent="⚠ "+(e && e.message ? e.message : String(e)).slice(0,200);
+  box.textContent="⚠ "+(e && e.message ? e.message : String(e)).slice(0,200)+
+    (fatal ? " — rendu arrêté pour protéger la machine. Recharge la page (F5)." : "");
 }
+let lastDraw=0;
 function loop(t){
+  if(!loopAlive) return;
   const dt=Math.min((t-lastT)/1000, 1); lastT=t;
   try{
     if(S.mode==="demo") demoTick(dt);
     fetchFrames();
-    draw();
+    if(t-lastDraw>66){ lastDraw=t; draw(); }   // max ~15 fps : léger même sur PC faible
     voiceCheck();
-  }catch(e){ if(++errCount<3) showErr(e); }
+  }catch(e){
+    if(++errCount>=3){ loopAlive=false; showErr(e,true); return; }  // arrêt d'urgence
+    showErr(e,false);
+  }
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
