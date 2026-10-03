@@ -393,7 +393,7 @@ async function analyseTrajectory(){
   if(!S.pos || S.heading==null) return;
   const nowMs = Date.now();
   const spd = S.speed>3 ? S.speed : 50/3.6;        // hypothèse 50 km/h si arrêté
-  const maxD = clamp(spd*45*60, 20000, 100000);    // horizon 45 min, cap 100 km
+  const maxD = clamp(spd*45*60, 60000, 100000);    // horizon 45 min, au moins 60 km (= portée du scope)
   const confirmNeeded = 2;                          // 2 échantillons consécutifs = confirmation
   let run=0, firstHit=null, unknown=0, scanned=0;
   for(let d=800; d<=maxD; d+=STEP_M){
@@ -633,12 +633,15 @@ function drawScope(){
       }
     }
   }
-  // --- arcs de distance (10/20/40/60 km) + graduations ---
+  // --- arcs de distance + graduations : 3 arcs si rien dans les 60 km,
+  //     4 (10 km inclus) quand de la pluie est dans le secteur ---
+  const imp0=S.impact, rainHit=(imp0 && !imp0.clear && !imp0.unknown);
+  const ARCS = rainHit ? [10,20,40,60] : [20,40,60];
   ctx.strokeStyle="rgba(90,255,140,.5)"; ctx.lineWidth=1.2*dpr;
   const fSmall=(land?9:11)*dpr;
   ctx.font=fSmall+"px monospace"; ctx.fillStyle="rgba(120,255,170,.85)";
   ctx.textAlign="center";
-  for(const km of [10,20,40,60]){
+  for(const km of ARCS){
     if(km*1000>maxR) continue;
     const r=km*1000*k;
     if(r<=0) continue;
@@ -664,33 +667,36 @@ function drawScope(){
   ctx.fillStyle="rgba(120,255,170,.9)"; ctx.font="bold "+((land?10:12)*dpr)+"px monospace";
   // (plus de libellé « 0° (cap) » — le cap se lit en ° en haut à droite)
   // --- pictogramme MOTO en bas, orienté vers le haut ---
-  drawMotoPicto(cx,cy-10*dpr,0.4*dpr,"#7dffb0");   // picto moto mini
+  drawMotoPicto(cx,cy-3*dpr,0.4*dpr,"#7dffb0");   // picto moto tout en bas
   // --- si aucune donnée : indication ---
   if(!S.pos || S.heading==null){
     ctx.textAlign="center"; ctx.fillStyle="#9fb2c8";
     ctx.font="bold "+(16*dpr)+"px sans-serif";
     ctx.fillText("Lance « Démarrer le guidage » ou « Mode démo » d'abord", w/2, h*0.45);
   }
-  // --- lecture type avion : CAP centré au-dessus du radar, TOUJOURS ---
+  // --- CAP seul, centré au-dessus du radar, TOUJOURS ---
   const topY=cy-maxR*k;                       // sommet du secteur
   ctx.textAlign="center";
   ctx.font="bold "+((land?13:16)*dpr)+"px monospace";
   ctx.fillStyle="#e8f4ff";
   ctx.fillText(S.heading!=null? String(Math.round(S.heading)).padStart(3,"0")+"°" : "---", cx, topY-26*dpr);
-  // --- 2e ligne : temps en MIN si alerte, distance en KM si clair (<60 km), couleur = niveau d'alerte ---
+  // --- DISTANCE À L'IMPACT : à DROITE, précise (décimale), couleur = niveau d'alerte ---
   const imp=S.impact;
-  let line2=null, col2="#7dffb0";                                  // vert = rien à signaler
-  if(imp && !imp.clear && !imp.unknown && imp.eta!=null){
-    const min=imp.eta/60, mm=Math.max(1,Math.round(min));
-    line2=mm+" MIN";
-    col2 = min<=5 ? "#ff5b5b" : "#ffb14d";                         // rouge ≤5 min, orange sinon
+  let lines=null, col="#7dffb0";                                   // vert = rien à signaler
+  if(imp && !imp.clear && !imp.unknown && imp.dist!=null){
+    const min=imp.eta/60;
+    col = min<=5 ? "#e74c3c" : "#f39c12";                          // comme l'alerte : rouge ≤5 min, orange sinon
+    lines=[(imp.dist/1000).toFixed(1)+" KM",                      // distance précise
+           Math.max(1,Math.round(min))+" MIN"];                    // temps d'impact
   }else if(imp && imp.clear && imp.maxDist<60){
-    line2=imp.maxDist+" KM";                                       // pluie repérée plus loin mais < 60 km
+    lines=[imp.maxDist.toFixed(0)+" KM"];                         // pluie plus loin mais < 60 km
   }
-  if(line2){
-    ctx.font="bold "+((land?11:13)*dpr)+"px monospace";
-    ctx.fillStyle=col2;
-    ctx.fillText(line2, cx, topY-10*dpr);
+  if(lines){
+    ctx.textAlign="right";
+    ctx.font="bold "+((land?12:15)*dpr)+"px monospace";
+    ctx.fillStyle=col;
+    let y=topY-40*dpr;
+    for(const t of lines){ ctx.fillText(t, w-14*dpr, y); y+=((land?15:19)*dpr); }
   }
   // intensité max sur l'axe (haut gauche)
   // vitesse affichée en BAS à gauche du canvas (plus dans le haut)
@@ -811,7 +817,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.18 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.19 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Alerte principale
   if(S.mode==="idle"){ return; }
