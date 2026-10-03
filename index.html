@@ -311,20 +311,25 @@ function drawRadar(){
   if(S.mode==="demo"){ drawDemoStorms(); return; }
   if(!S.frames.length) return;
   const frame = pickFrame(Date.now());
-  /* Tuiles radar bornées entre z6 et z7 : RainViewer ne sert les échos qu'à
-     ces niveaux — au-delà il renvoie « Zoom Level Not Supported » qui masque
-     les précipitations, en dessous des tuiles noires. Les positions restent
-     alignées puisque tout est recalculé au même zoom tuiles. */
-  const zr=clamp(S.center.zoom, 6, 7);
-  const w=cv.width,h=cv.height,z=zr;
-  const cx=lon2px(S.center.lon,z), cy=lat2px(S.center.lat,z);
-  const x0=Math.floor((cx-w/2)/TILE), x1=Math.floor((cx+w/2)/TILE);
-  const y0=Math.floor((cy-h/2)/TILE), y1=Math.floor((cy+h/2)/TILE);
+  /* Tuiles radar chargées à un zoom FIXE (z6–z7, seuls niveaux servis par
+     RainViewer), puis AGRANDIES à l'échelle d'affichage : les échos restent
+     cloués à leur position géographique quel que soit le zoom de la carte.
+     Auparavant ils étaient dessinés sans mise à l'échelle → 8× trop près
+     du centre à z10, ils « suivaient » la carte. */
+  const zDisp=S.center.zoom, zr=clamp(zDisp, 6, 7);
+  const scale=1<<(zDisp-zr);                 // facteur d'agrandissement entier
+  const w=cv.width,h=cv.height;
+  const cx=lon2px(S.center.lon,zr), cy=lat2px(S.center.lat,zr);
+  const x0=Math.floor((cx-w/2/scale)/TILE), x1=Math.floor((cx+w/2/scale)/TILE);
+  const y0=Math.floor((cy-h/2/scale)/TILE), y1=Math.floor((cy+h/2/scale)/TILE);
   ctx.globalAlpha=0.62;
   for(let tx=x0;tx<=x1;tx++) for(let ty=y0;ty<=y1;ty++){
-    const img=radarTile(frame,z,tx,ty);
+    const img=radarTile(frame,zr,tx,ty);
     if(img instanceof Image && img.naturalWidth)
-      ctx.drawImage(img, Math.round(tx*TILE-(cx-w/2)), Math.round(ty*TILE-(cy-h/2)));
+      ctx.drawImage(img,
+        Math.round((tx*TILE-cx)*scale + w/2),
+        Math.round((ty*TILE-cy)*scale + h/2),
+        TILE*scale, TILE*scale);
   }
   ctx.globalAlpha=1;
 }
@@ -806,7 +811,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.17 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.18 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Alerte principale
   if(S.mode==="idle"){ return; }
