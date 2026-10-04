@@ -660,12 +660,20 @@ function fuseHeading(){
   if(S.compass!=null){
     const coh=compassCoherence();
     if(coh>0.75){                            // en dessous : magnétomètre écarté d'office
-  /* Boussole décrédibilisée quand le téléphone penche (compensation d'assiette
-     absente : une forte inclinaison = capteur hors de son plan de validité) */
+  /* Boussole : variance de base liée à la cohérence, puis deux pénalités :
+     1) ASSIETTE (beta/gamma) — inclinaison hors plan de validité ;
+     2) GIMBAL LOCK — téléphone proche de la VERTICALE (debout) : l'angle
+        alpha (d'où vient le cap) devient singulier → capure aberrante.
+        Détection par la gravité sur l'axe z du téléphone : |az|/g ≈ 1 à plat,
+        ≈ 0 debout. Debout, la boussole est quasi écartée d'office. */
   let Rcompass = 4 + 500*(1-coh)*(1-coh);    // coh .99 → σ≈2° ; coh .8 → σ≈5°
   if(S.orient.have){
     const tilt=Math.max(Math.abs(S.orient.beta),Math.abs(S.orient.gamma));
-    if(tilt>25) Rcompass *= 1 + Math.min((tilt-25)/25*4, 8);  // jusqu'à ×9 à 65°
+    if(tilt>25) Rcompass *= 1 + Math.min((tilt-25)/25*4, 8);  // jusqu'à ×9
+  }
+  if(S.motion.have){
+    const up=Math.abs(S.motion.az)/9.81;     // 1 = téléphone à plat, 0 = vertical
+    if(up<0.5) Rcompass *= 1 + (0.5-up)*80;  // up=.25 → ×21 ; up=0 → ×41
   }
   kalmanUpdate(compassHeading(), Rcompass);
     }
@@ -988,7 +996,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.35 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.36 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Télémétrie pilotage : angle de corne + G (affichés en colonne gauche)
   if(S.mode==="gps"){
