@@ -396,6 +396,23 @@ async function analyseTrajectory(){
   const spd = S.speed>3 ? S.speed : 50/3.6;        // hypothèse 50 km/h si arrêté
   const maxD = clamp(spd*45*60, 60000, 100000);    // horizon 45 min, au moins 60 km (= portée du scope)
   const confirmNeeded = 2;                          // 2 échantillons consécutifs = confirmation
+  /* --- ÉTAT 1 : suis-je DÉJÀ sous la pluie ? (échantillon à MA position) --- */
+  const hereIt = intensityAt(S.pos.lat, S.pos.lon, nowMs);
+  if(hereIt > 0){
+    /* Chercher la SORTIE de pluie le long du cap (2 échantillons secs) */
+    let dry=0, exitD=maxD;
+    for(let d=STEP_M; d<=maxD; d+=STEP_M){
+      const p=destPoint(S.pos.lat,S.pos.lon,S.heading,d);
+      const it=intensityAt(p.lat,p.lon,nowMs+(d/spd)*1000);
+      if(it===-1) continue;
+      if(it===0){ dry++; if(dry>=confirmNeeded){ exitD=d-(confirmNeeded-1)*STEP_M; break; } }
+      else dry=0;
+    }
+    S.impact={inRain:true, intensity:hereIt, dist:exitD, eta:exitD/spd,
+              clear:false, ends:exitD<maxD};
+    return;
+  }
+  /* --- ÉTAT 2 : pluie devant ? (logique habituelle) --- */
   let run=0, firstHit=null, unknown=0, scanned=0;
   for(let d=800; d<=maxD; d+=STEP_M){
     const p=destPoint(S.pos.lat,S.pos.lon,S.heading,d);
@@ -434,7 +451,18 @@ function speak(txt){
        speechSynthesis.speak(u); }catch(e){}
 }
 function voiceCheck(){
-  if(!S.impact || S.impact.clear || S.impact.unknown || S.impact.eta==null) return;
+  if(!S.impact || S.impact.unknown) return;
+  if(S.impact.inRain){
+    /* Annonce d'entrée sous la pluie (1 fois par épisode) */
+    if(S.spokenBand>0 && S.impact.eta!=null){
+      S.spokenBand=0;
+      const km=(S.impact.dist/1000).toFixed(0);
+      speak(S.impact.ends ? "Tu es sous la pluie. Sortie dans environ "+km+" kilomètres."
+                          : "Tu es sous la pluie. Elle couvre toute la trajectoire.");
+    }
+    return;
+  }
+  if(S.impact.clear || S.impact.eta==null) return;
   const min=S.impact.eta/60;
   const bands=[[15,"Attention. Pluie sur ta route dans quinze minutes."],
                [10,"Pluie dans dix minutes. Réduis si nécessaire."],
@@ -818,7 +846,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.21 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.22 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Alerte principale
   if(S.mode==="idle"){ return; }
@@ -827,6 +855,15 @@ function updateHud(){
   const imp=S.impact;
   if(!imp){ setAlert("…","Analyse de la trajectoire","idle"); return; }
   if(imp.unknown){ setAlert("RADAR —","Données radar indisponibles (réseau ?)","warn"); return; }
+  if(imp.inRain){
+    /* SOUS LA PLUIE : intensité en cours + distance de sortie */
+    const outKm=(imp.dist/1000).toFixed(1);
+    setAlert("🌧 SOUS LA PLUIE",
+             imp.ends ? "propre dans "+outKm+" km — précip. "+INTENSITE[imp.intensity]
+                      : "pluie sur toute la trajectoire — précip. "+INTENSITE[imp.intensity],
+             "bad");
+    return;
+  }
   if(imp.clear){
     setAlert("AUCUNE PLUIE","sur les prochains "+imp.maxDist+" km","ok"); return;
   }
