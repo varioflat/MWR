@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0b0f14">
+<link rel="manifest" href="manifest.json">
 <title>Radar Pluie Moto</title>
 <style>
   :root{ --bg:#0b0f14; --fg:#e8eef5; --ok:#2ecc71; --warn:#f39c12; --bad:#e74c3c; --acc:#4da3ff; }
@@ -817,7 +818,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.19 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.20 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Alerte principale
   if(S.mode==="idle"){ return; }
@@ -961,6 +962,11 @@ $("btnStart").onclick=startGuidage;
 
 /* Rafraîchissement périodique de l'analyse */
 setInterval(()=>maybeAnalyse(true), 8000);
+
+/* ---------- PWA : installation plein écran + démarrage hors-ligne ---------- */
+if("serviceWorker" in navigator){
+  navigator.serviceWorker.register("sw.js").catch(()=>{});
+}
 </script>
 </body>
 </html>
