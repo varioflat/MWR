@@ -748,10 +748,9 @@ function drawScope(){
     let y=capY-14*dpr;
     for(const t of lines){ ctx.fillText(t, w-14*dpr, y); y+=((land?15:19)*dpr); }
   }
-  // intensité max sur l'axe (haut gauche)
-  // vitesse affichée en BAS à gauche du canvas (plus dans le haut)
+  // vitesse : affichée UNIQUEMENT par le div HTML #speedBottom (bas gauche) —
+  // le canvas n'écrit plus « KM/H » ici (sinon l'affichage se dédouble).
   ctx.textAlign="left";
-  ctx.fillText((S.speed*3.6).toFixed(0)+" KM/H", 12*dpr, h-14*dpr);
 }
 function drawMotoPicto(x,y,s,col){
   ctx.save(); ctx.translate(x,y); ctx.scale(s,s); ctx.strokeStyle=col;
@@ -867,7 +866,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.31 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.32 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Alerte principale
   if(S.mode==="idle"){ return; }
