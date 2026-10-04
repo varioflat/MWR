@@ -687,10 +687,15 @@ function drawScope(){
     if(km*1000>maxR) continue;
     const r=km*1000*k;
     if(r<=0) continue;
-    ctx.beginPath();
-    ctx.arc(cx,cy,r,-Math.PI/2-rad(SCOPE_HALF),-Math.PI/2+rad(SCOPE_HALF));
-    ctx.stroke();
-    ctx.fillText(km+" km",cx,cy-r-4*dpr);
+    /* Arc INTERROMPU au sommet pour accueillir le label « dans » l'arc :
+       deux tranches de part et d'autre, texte posé sur l'arc. */
+    const GAP=12;                                  // demi-ouverture du passage (degrés)
+    ctx.beginPath(); ctx.arc(cx,cy,r,-Math.PI/2-rad(SCOPE_HALF),-Math.PI/2-rad(GAP)); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx,cy,r,-Math.PI/2+rad(GAP),-Math.PI/2+rad(SCOPE_HALF)); ctx.stroke();
+    const prevBase=ctx.textBaseline;
+    ctx.textBaseline="middle";
+    ctx.fillText(km+" km",cx,cy-r);
+    ctx.textBaseline=prevBase;
   }
   // graduations angulaires tous les 10°
   ctx.strokeStyle="rgba(90,255,140,.28)";
@@ -723,7 +728,7 @@ function drawScope(){
   ctx.textAlign="center";
   ctx.font="bold "+((land?13:16)*dpr)+"px monospace";
   ctx.fillStyle="#e8f4ff";
-  const capY=Math.max(topY*0.32, 24*dpr);   // cap : entre le sommet du secteur et le bord, sans toucher les arcs
+  const capY=Math.max(topY*0.5, 24*dpr);   // cap : à mi-chemin entre l'arc des 60 km (sommet du secteur) et le bord supérieur
   ctx.fillText(S.heading!=null? String(Math.round(S.heading)).padStart(3,"0")+"°" : "---", cx, capY);
   // --- DISTANCE À L'IMPACT : à DROITE, précise (décimale), couleur = niveau d'alerte ---
   const imp=S.impact;
@@ -862,7 +867,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.27 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.28 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Alerte principale
   if(S.mode==="idle"){ return; }
