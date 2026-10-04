@@ -129,6 +129,8 @@ const S = {
   gpsBearing: null,          // cap déduit des positions successives
   compass: null,             // cap boussole brut (deg)
   compassOffset: 0,          // calibration boussole vs GPS
+  compassSamples: [],        // dernières mesures brutes du magnétomètre
+  lastMoveTs: 0,             // dernier instant de déplacement effectif (ms)
   heading: null,             // cap fusionné (deg, 0=Nord)
   voice: true,
   lastFix: null,             // position précédente (pour le cap GPS)
@@ -505,6 +507,7 @@ function onFix(fix){
   const moved=S.lastFix? hav(S.lastFix.lat,S.lastFix.lon,p.lat,p.lon) : 0;
   if(c.speed!=null && !isNaN(c.speed) && c.speed>=0) S.speed=c.speed;
   else if(dt>0.5) S.speed=moved/dt;
+  if((S.speed||0)>2.5) S.lastMoveTs=Date.now();
   // Cap par positions successives (fiable dès ~10 km/h)
   if(moved>10 && dt>0.5 && (S.speed||0)>2.5){
     const b=bearFrom(S.lastFix.lat,S.lastFix.lon,p.lat,p.lon);
@@ -529,7 +532,12 @@ function startCompass(){
     let ch=null;
     if(e.webkitCompassHeading!=null) ch=e.webkitCompassHeading;
     else if(e.absolute && e.alpha!=null) ch=(360-e.alpha)%360;
-    if(ch!=null){ S.compass=ch; fuseHeading(); }
+    if(ch!=null){
+      S.compass=ch;
+      S.compassSamples.push(ch);
+      if(S.compassSamples.length>12) S.compassSamples.shift();
+      fuseHeading();
+    }
   };
   if(typeof DOE.requestPermission==="function"){
     DOE.requestPermission().then(st=>{ if(st==="granted")
@@ -540,15 +548,40 @@ function startCompass(){
     compassWatch=true;
   }
 }
-/* Fusion : GPS à vitesse, boussole (recalibrée) à l'arrêt / faible allure */
+/* Fusion : GPS en mouvement ; à l'arrêt on garde le cap GPS 45 s (feu rouge :
+   la moto ne tourne pas sur place), puis boussole — mais uniquement si le
+   magnétomètre est STABLE (sur une moto il baigne dans le métal et délire
+   facilement). En cas de pivot franc à l'arrêt, on suit la boussole. */
+function compassHeading(){ return (S.compass + S.compassOffset + 720)%360; }
+function compassStable(){
+  const s=S.compassSamples.slice(-8);
+  if(s.length<8) return false;
+  let sx=0, sy=0;
+  for(const a of s){ sx+=Math.cos(rad(a)); sy+=Math.sin(rad(a)); }
+  return Math.hypot(sx,sy)/8 > 0.97;              // mesures très cohérentes
+}
 function fuseHeading(){
   if(S.mode==="demo"){ S.heading=S.demo.heading; return; }
-  if(S.gpsBearing!=null && (S.speed||0)>2.5){
+  const spd=S.speed||0;
+  if(S.gpsBearing!=null && spd>2.5){
     S.heading=(S.gpsBearing+360)%360;
-  }else if(S.compass!=null){
-    S.heading=(S.compass + S.compassOffset + 720)%360;
+    return;
   }
-  // sinon on garde le dernier cap connu
+  const stoppedMs=Date.now()-(S.lastMoveTs||0);
+  const ch = S.compass!=null ? compassHeading() : null;
+  if(S.gpsBearing!=null && stoppedMs<45000){
+    // arrêt court : cap GPS conservé, sauf pivot franc détecté par une boussole stable
+    if(ch!=null && compassStable() && S.heading!=null && Math.abs(angleDiff(ch,S.heading))>30){
+      S.heading=(S.heading + angleDiff(ch,S.heading)*0.25 + 720)%360;
+    }
+    return;
+  }
+  if(ch!=null && compassStable()){
+    // boussole lissée (pas de sauts brusques)
+    S.heading = S.heading==null ? ch
+              : (S.heading + angleDiff(ch,S.heading)*0.25 + 720)%360;
+  }
+  // sinon on garde le dernier cap connu (magnétomètre dans les choux → silence)
 }
 
 /* =========================================================================
@@ -866,7 +899,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.32 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.33 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Alerte principale
   if(S.mode==="idle"){ return; }
