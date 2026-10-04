@@ -132,7 +132,7 @@ const S = {
   compassOffset: 0,          // calibration boussole vs GPS
   compassSamples: [],        // dernières mesures brutes du magnétomètre
   kalman: {P: 400, init: false},   // filtre de Kalman 1D sur le cap
-  orient: {beta: 0, gamma: 0, have: false},   // assiette téléphone (moto penchée)
+  orient: {alpha: null, beta: 0, gamma: 0, have: false, sawAbsolute: false},  // attitude Euler W3C du téléphone
   motion: {ax: 0, ay: 0, az: 0, have: false},// accéléromètre (G latéraux)
   lastMoveTs: 0,             // dernier instant de déplacement effectif (ms)
   heading: null,             // cap fusionné (deg, 0=Nord)
@@ -533,18 +533,30 @@ function startCompass(){
   const DOE=window.DeviceOrientationEvent;
   if(!DOE) return;
   const handler=e=>{
-    let ch=null;
-    if(e.webkitCompassHeading!=null) ch=e.webkitCompassHeading;
-    else if(e.absolute && e.alpha!=null) ch=(360-e.alpha)%360;
-    if(ch!=null){
-      S.compass=ch;
-      S.compassSamples.push(ch);
-      if(S.compassSamples.length>12) S.compassSamples.shift();
-      fuseHeading();
-    }
-    /* Inclinaison du téléphone = assiette de la moto (support solidaire) */
+    /* Assiette du téléphone = assiette de la moto (support solidaire) */
     if(e.beta!=null || e.gamma!=null){
       S.orient.beta=e.beta||0; S.orient.gamma=e.gamma||0; S.orient.have=true;
+    }
+    /* iOS : webkitCompassHeading (cap natif) */
+    if(e.webkitCompassHeading!=null){
+      S.compass=e.webkitCompassHeading;
+      S.compassSamples.push(S.compass);
+      if(S.compassSamples.length>12) S.compassSamples.shift();
+      fuseHeading(); return;
+    }
+    /* Android : attitude ABSOLUE (Euler W3C fusionné gravité+magnétique)
+       → cap À COMPENSATION D'ASSIETTE. Les événements RELATIFS (repère
+       dérivant) sont ignorés dès qu'un absolu a été vu. */
+    if(e.absolute && e.alpha!=null) S.orient.sawAbsolute=true;
+    if(e.alpha!=null && (e.absolute || !S.orient.sawAbsolute)){
+      S.orient.alpha=e.alpha;
+      const h=tiltCompHeading();            // null si axe écran vertical
+      if(h!=null){
+        S.compass=h;
+        S.compassSamples.push(h);
+        if(S.compassSamples.length>12) S.compassSamples.shift();
+        fuseHeading();
+      }
     }
   };
   if(typeof DOE.requestPermission==="function"){
@@ -620,6 +632,33 @@ function lonG(){
    pivot suivi à l'arrêt, cap figé mais juste au feu rouge.
    ============================================================ */
 function compassHeading(){ return (S.compass + S.compassOffset + 720)%360; }
+/* Cap À COMPENSATION D'ASSIETTE : projection de l'axe « haut de l'écran »
+   dans le plan horizontal terrestre, à partir de l'attitude Euler W3C
+   (alpha,beta,gamma) du capteur ABSOLU (fusion gravité+magnétomètre côté
+   Android : la composante verticale du champ est déjà traitée par le
+   capteur). L'axe projeté dépend de l'orientation ÉCRAN (portrait/
+   paysage) : c'est TOUJOURS le haut du contenu qui donne le cap.
+   Retourne null si l'axe écran est quasi vertical (téléphone à plat) :
+   cap indéterminé, pas faux. */
+function tiltCompHeading(){
+  if(S.orient.alpha==null) return null;
+  const a=rad(S.orient.alpha), b=rad(S.orient.beta||0), g=rad(S.orient.gamma||0);
+  /* axe « haut du contenu » en repère téléphone, selon la rotation écran */
+  const ang=screenAngle();
+  let ux=0, uy=1;
+  if(ang===90){ ux=-1; uy=0; } else if(ang===180){ ux=0; uy=-1; } else if(ang===270){ ux=1; uy=0; }
+  /* u_world = R^T · u_dev  avec R = Rz(a)·Rx(b)·Ry(g)  (W3C)
+     → u_world = Rz(-a)·Rx(-b)·Ry(-g)·u_dev ; repère monde : X=Est, Y=Nord, Z=haut */
+  let x=Math.cos(-a)*ux - Math.sin(-a)*uy;
+  let y=Math.sin(-a)*ux + Math.cos(-a)*uy;
+  const cb=Math.cos(b), sb=Math.sin(b);
+  const y2= cb*y + sb*0, z2=-sb*y + cb*0;      // Rx(-b)
+  const cg=Math.cos(g), sg=Math.sin(g);
+  const x3= cg*x - sg*z2, z3= sg*x + cg*z2;     // Ry(-g)
+  const horiz=Math.hypot(x3,y2);                // composante horizontale de l'axe
+  if(horiz<0.3) return null;                    // axe écran vertical → cap indéterminé
+  return (Math.atan2(-x3,y2)*180/Math.PI + 360)%360;
+}
 function compassCoherence(){
   const s=S.compassSamples.slice(-8);
   if(s.length<8) return 0;
@@ -638,21 +677,13 @@ function kalmanUpdate(z, R){
 function fuseHeading(){
   if(S.mode==="demo"){ S.heading=S.demo.heading; return; }
   const k=S.kalman;
-  /* --- Initialisation : première mesure fiable. La boussole n'initialise le
-     filtre QUE si le téléphone est à plat (ni assiette, ni vertical — sinon
-     mesure en gimbal lock : mieux vaut PAS de cap qu'un cap faux). --- */
+  /* --- Initialisation : première mesure fiable. La boussole n'est alimentée
+      QUE par tiltCompHeading() valide (axe écran projetable) — plus besoin
+      de tests d'assiette : une projection invalide ne l'initialise pas. --- */
   if(!k.init){
     if(S.gpsBearing!=null && (S.speed||0)>2.5){ S.heading=(S.gpsBearing+360)%360; k.P=25; k.init=true; return; }
     const coh0=compassCoherence();
-    let flatEnough=true;
-    if(S.orient.have){
-      const tilt=Math.max(Math.abs(S.orient.beta),Math.abs(S.orient.gamma));
-      if(tilt>25) flatEnough=false;
-    }
-    if(S.motion.have && Math.abs(S.motion.az)/9.81<0.7) flatEnough=false;  // téléphone debout
-    if(S.compass!=null && coh0>0.97 && flatEnough){
-      S.heading=compassHeading(); k.P=50/coh0; k.init=true; return;
-    }
+    if(S.compass!=null && coh0>0.97){ S.heading=compassHeading(); k.P=50/coh0; k.init=true; return; }
     return;                                 // rien de fiable : cap indéterminé (affiché « --- »)
   }
   /* --- Prédiction : cap constant, incertitude croît avec l'arrêt --- */
@@ -666,26 +697,14 @@ function fuseHeading(){
     const R=6 + 60/(1+(S.speed/3));         // ≈ σ 8° à 8 km/h, σ 2.7° à 55 km/h
     kalmanUpdate((S.gpsBearing+360)%360, R);
   }
-  /* --- Mesure 2 : boussole — variance liée à sa cohérence --- */
+  /* --- Mesure 2 : boussole TILT-COMPENSÉE (axe haut de l'écran projeté dans
+      le plan horizontal, indépendant de l'orientation portrait/paysage et de
+      la penche de la moto — la gravité fait le travail). S.compass n'existe
+      que si la projection est valide. Variance liée à la cohérence. --- */
   if(S.compass!=null){
     const coh=compassCoherence();
     if(coh>0.75){                            // en dessous : magnétomètre écarté d'office
-  /* Boussole : variance de base liée à la cohérence, puis deux pénalités :
-     1) ASSIETTE (beta/gamma) — inclinaison hors plan de validité ;
-     2) GIMBAL LOCK — téléphone proche de la VERTICALE (debout) : l'angle
-        alpha (d'où vient le cap) devient singulier → capure aberrante.
-        Détection par la gravité sur l'axe z du téléphone : |az|/g ≈ 1 à plat,
-        ≈ 0 debout. Debout, la boussole est quasi écartée d'office. */
-  let Rcompass = 4 + 500*(1-coh)*(1-coh);    // coh .99 → σ≈2° ; coh .8 → σ≈5°
-  if(S.orient.have){
-    const tilt=Math.max(Math.abs(S.orient.beta),Math.abs(S.orient.gamma));
-    if(tilt>25) Rcompass *= 1 + Math.min((tilt-25)/25*4, 8);  // jusqu'à ×9
-  }
-  if(S.motion.have){
-    const up=Math.abs(S.motion.az)/9.81;     // 1 = téléphone à plat, 0 = vertical
-    if(up<0.5) Rcompass *= 1 + (0.5-up)*80;  // up=.25 → ×21 ; up=0 → ×41
-  }
-  kalmanUpdate(compassHeading(), Rcompass);
+      kalmanUpdate(compassHeading(), 4 + 500*(1-coh)*(1-coh));   // coh .99 → σ≈2° ; coh .8 → σ≈5°
     }
   }
   if(k.P>2000) k.P=2000;                     // garde-fou
@@ -1006,7 +1025,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.37 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.38 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Télémétrie pilotage : angle de corne + G (affichés en colonne gauche)
   if(S.mode==="gps"){
