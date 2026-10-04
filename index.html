@@ -638,12 +638,22 @@ function kalmanUpdate(z, R){
 function fuseHeading(){
   if(S.mode==="demo"){ S.heading=S.demo.heading; return; }
   const k=S.kalman;
-  /* --- Initialisation : première mesure fiable --- */
+  /* --- Initialisation : première mesure fiable. La boussole n'initialise le
+     filtre QUE si le téléphone est à plat (ni assiette, ni vertical — sinon
+     mesure en gimbal lock : mieux vaut PAS de cap qu'un cap faux). --- */
   if(!k.init){
     if(S.gpsBearing!=null && (S.speed||0)>2.5){ S.heading=(S.gpsBearing+360)%360; k.P=25; k.init=true; return; }
     const coh0=compassCoherence();
-    if(S.compass!=null && coh0>0.97){ S.heading=compassHeading(); k.P=50/coh0; k.init=true; return; }
-    return;
+    let flatEnough=true;
+    if(S.orient.have){
+      const tilt=Math.max(Math.abs(S.orient.beta),Math.abs(S.orient.gamma));
+      if(tilt>25) flatEnough=false;
+    }
+    if(S.motion.have && Math.abs(S.motion.az)/9.81<0.7) flatEnough=false;  // téléphone debout
+    if(S.compass!=null && coh0>0.97 && flatEnough){
+      S.heading=compassHeading(); k.P=50/coh0; k.init=true; return;
+    }
+    return;                                 // rien de fiable : cap indéterminé (affiché « --- »)
   }
   /* --- Prédiction : cap constant, incertitude croît avec l'arrêt --- */
   const stoppedMs=Date.now()-(S.lastMoveTs||0);
@@ -996,7 +1006,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.36 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.37 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Télémétrie pilotage : angle de corne + G (affichés en colonne gauche)
   if(S.mode==="gps"){
