@@ -279,6 +279,17 @@ function pickFrame(targetTs){
   }
   return best;
 }
+/* Image OBSERVÉE la plus proche (nowcast exclue) : pour l'état « suis-je
+   sous la pluie ? », on ne se fie qu'au réel, jamais à l'extrapolation. */
+function pickPastFrame(targetTs){
+  let best=null, bd=Infinity;
+  for(const f of S.frames){
+    if(f.time*1000 > targetTs) continue;          // observations passées uniquement
+    const d=Math.abs(f.time*1000-targetTs);
+    if(d<bd){bd=d;best=f;}
+  }
+  return best;
+}
 const radarCache = new Map();  // key -> Image (affichage)
 function radarTile(frame,z,x,y){
   if(!frame) return null;
@@ -365,9 +376,9 @@ function radarImageData(frame,z,x,y){
 /* Intensité en un point lat/lon, sur l'image radar la plus proche de targetTs.
    Échelle de retour : 0 = rien, 1 = faible, 2 = modérée, 3 = forte, 4 = très forte,
    -1 = donnée indisponible (tuile pas encore chargée / échouée). */
-function intensityAt(lat,lon,targetTs){
+function intensityAt(lat,lon,targetTs,pastOnly){
   if(S.mode==="demo") return demoIntensityAt(lat,lon,targetTs);
-  const frame=pickFrame(targetTs);
+  const frame=(pastOnly?pickPastFrame:pickFrame)(targetTs);
   if(!frame) return -1;
   const px=lon2px(lon,Z_SMP), py=lat2px(lat,Z_SMP);
   const tx=Math.floor(px/TILE), ty=Math.floor(py/TILE);
@@ -383,7 +394,8 @@ function intensityAt(lat,lon,targetTs){
   if(r>190 && g>170) return 2;                    // jaune : modéré
   if(r>190 && g<=170 && g>90) return 3;           // orange : fort
   if(r>160 && g<90) return 4;                     // rouge : très fort
-  return 4;                                      // magenta : grêle/très fort
+  if(r>150 && b>150 && g<130) return 4;           // magenta : grêle/très fort
+  return 0;                                       // couleur non reconnue → PAS de pluie (avant : return 4 = faux positifs)
 }
 
 /* =========================================================================
@@ -396,8 +408,9 @@ async function analyseTrajectory(){
   const spd = S.speed>3 ? S.speed : 50/3.6;        // hypothèse 50 km/h si arrêté
   const maxD = clamp(spd*45*60, 60000, 100000);    // horizon 45 min, au moins 60 km (= portée du scope)
   const confirmNeeded = 2;                          // 2 échantillons consécutifs = confirmation
-  /* --- ÉTAT 1 : suis-je DÉJÀ sous la pluie ? (échantillon à MA position) --- */
-  const hereIt = intensityAt(S.pos.lat, S.pos.lon, nowMs);
+  /* --- ÉTAT 1 : suis-je DÉJÀ sous la pluie ? (échantillon à MA position,
+     image OBSERVÉE uniquement — pas de nowcast) --- */
+  const hereIt = intensityAt(S.pos.lat, S.pos.lon, nowMs, true);
   if(hereIt > 0){
     /* Chercher la SORTIE de pluie le long du cap (2 échantillons secs) */
     let dry=0, exitD=maxD;
@@ -846,7 +859,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.22 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.23 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Alerte principale
   if(S.mode==="idle"){ return; }
