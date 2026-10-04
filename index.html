@@ -716,7 +716,7 @@ function drawScope(){
   // --- pictogramme MOTO : POSÉ sur le centre du secteur (point d'où partent
   //     les arcs). Le dessin s'étend vers le haut depuis son ancre : on
   //     décale l'ancre pour que le milieu du picto soit exactement à cy. ---
-  drawMotoPicto(cx,cy+6*dpr,0.4*dpr,"#7dffb0");
+  drawMotoPicto(cx,cy+6*dpr,0.32*dpr,"#7dffb0");
   // --- si aucune donnée : indication ---
   if(!S.pos || S.heading==null){
     ctx.textAlign="center"; ctx.fillStyle="#9fb2c8";
@@ -754,20 +754,30 @@ function drawScope(){
   ctx.fillText((S.speed*3.6).toFixed(0)+" KM/H", 12*dpr, h-14*dpr);
 }
 function drawMotoPicto(x,y,s,col){
-  ctx.save(); ctx.translate(x,y); ctx.scale(s,s); ctx.strokeStyle=col;
-  ctx.fillStyle=col; ctx.lineWidth=2.4; ctx.lineCap="round";
-  // roues
-  ctx.beginPath(); ctx.arc(-10,-6,5.5,0,7); ctx.stroke();
-  ctx.beginPath(); ctx.arc(10,-6,5.5,0,7); ctx.stroke();
-  // cadre / fourche
+  /* Moto façon emoji : vue de profil, sportive, pneus épais.
+     Dessinée tournée vers la droite puis pivotée pour regarder vers le HAUT
+     (sens de la marche dans le viseur). Origine = centre de la machine. */
+  ctx.save(); ctx.translate(x,y); ctx.scale(s,s); ctx.rotate(-Math.PI/2);
+  ctx.strokeStyle=col; ctx.fillStyle=col; ctx.lineWidth=5; ctx.lineCap="round";
+  // pneus arrière / avant
+  ctx.beginPath(); ctx.arc(-28,6,11,0,7); ctx.lineWidth=6; ctx.stroke();
+  ctx.beginPath(); ctx.arc( 28,6,11,0,7); ctx.stroke();
+  ctx.lineWidth=5;
+  // bras oscillant
+  ctx.beginPath(); ctx.moveTo(-28,6); ctx.lineTo(0,-2); ctx.stroke();
+  // carrosserie : dosseret/semelle → selle → réservoir (swoosh way emoji)
   ctx.beginPath();
-  ctx.moveTo(-10,-6); ctx.lineTo(-3,-14); ctx.lineTo(6,-14); ctx.lineTo(10,-6);
-  ctx.moveTo(-3,-14); ctx.lineTo(-1,-19);      // guidon
-  ctx.moveTo(6,-14); ctx.lineTo(9,-19);         // fourche
+  ctx.moveTo(-16,-2);
+  ctx.bezierCurveTo(-24,-12,-18,-18,-8,-16);   // dosseret arrière
+  ctx.bezierCurveTo(0,-20,10,-20,16,-13);      // selle + réservoir
   ctx.stroke();
-  // silhouette pilote
-  ctx.beginPath(); ctx.arc(-1,-24,3,0,7); ctx.fill();  // casque
-  ctx.beginPath(); ctx.moveTo(-4,-21); ctx.lineTo(1,-13); ctx.stroke(); // buste
+  // fourche avant
+  ctx.beginPath(); ctx.moveTo(14,-12); ctx.lineTo(28,6); ctx.stroke();
+  // guidon
+  ctx.beginPath(); ctx.moveTo(16,-14); ctx.lineTo(10,-19); ctx.stroke();
+  // échappement
+  ctx.beginPath(); ctx.moveTo(-22,12);
+  ctx.bezierCurveTo(-10,15,2,14,10,10); ctx.stroke();
   ctx.restore();
 }
 /* =========================================================================
@@ -867,7 +877,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.29 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.30 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Alerte principale
   if(S.mode==="idle"){ return; }
