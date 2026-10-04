@@ -130,6 +130,7 @@ const S = {
   compass: null,             // cap boussole brut (deg)
   compassOffset: 0,          // calibration boussole vs GPS
   compassSamples: [],        // dernières mesures brutes du magnétomètre
+  kalman: {P: 400, init: false},   // filtre de Kalman 1D sur le cap
   lastMoveTs: 0,             // dernier instant de déplacement effectif (ms)
   heading: null,             // cap fusionné (deg, 0=Nord)
   voice: true,
@@ -548,40 +549,69 @@ function startCompass(){
     compassWatch=true;
   }
 }
-/* Fusion : GPS en mouvement ; à l'arrêt on garde le cap GPS 45 s (feu rouge :
-   la moto ne tourne pas sur place), puis boussole — mais uniquement si le
-   magnétomètre est STABLE (sur une moto il baigne dans le métal et délire
-   facilement). En cas de pivot franc à l'arrêt, on suit la boussole. */
+/* ============================================================
+   Fusion cap : KALMAN 1D sur l'angle (gestion du wrap via angleDiff).
+   État : heading. P = variance d'incertitude du cap.
+   Prédiction : cap constant ; Q croît avec le temps d'arrêt (une moto
+   à l'arrêt peut être déplacée) et est faible en roulage.
+   Mesures :
+   - cap GPS (bearing positions successives) : bruit R décroissant
+     avec la vitesse (dérivée de position bruitée à basse allure) ;
+   - boussole (recalibrée par compassOffset entretenu en roulage) :
+     bruit R fonction de la COHÉRENCE des dernières mesures (test
+     circulaire) — un magnétomètre affolé voit sa variance exploser
+     et est naturellement écarté par le filtre.
+   Gate d'innovation : glitch isolé (>100° d'écart) ignoré tant que
+   le cap estimé est sûr (P faible).
+   Résultat : transitions GPS↔boussole continues (sans seuil dur),
+   pivot suivi à l'arrêt, cap figé mais juste au feu rouge.
+   ============================================================ */
 function compassHeading(){ return (S.compass + S.compassOffset + 720)%360; }
-function compassStable(){
+function compassCoherence(){
   const s=S.compassSamples.slice(-8);
-  if(s.length<8) return false;
+  if(s.length<8) return 0;
   let sx=0, sy=0;
   for(const a of s){ sx+=Math.cos(rad(a)); sy+=Math.sin(rad(a)); }
-  return Math.hypot(sx,sy)/8 > 0.97;              // mesures très cohérentes
+  return Math.hypot(sx,sy)/8;              // 1 = mesures parfaitement cohérentes
+}
+function kalmanUpdate(z, R){
+  const k=S.kalman;
+  const innov=angleDiff(z, S.heading);
+  if(Math.abs(innov)>100 && k.P<20) return;   // glitch rejeté
+  const K=k.P/(k.P+R);
+  S.heading=(S.heading + innov*K + 720)%360;
+  k.P=(1-K)*k.P;
 }
 function fuseHeading(){
   if(S.mode==="demo"){ S.heading=S.demo.heading; return; }
-  const spd=S.speed||0;
-  if(S.gpsBearing!=null && spd>2.5){
-    S.heading=(S.gpsBearing+360)%360;
+  const k=S.kalman;
+  /* --- Initialisation : première mesure fiable --- */
+  if(!k.init){
+    if(S.gpsBearing!=null && (S.speed||0)>2.5){ S.heading=(S.gpsBearing+360)%360; k.P=25; k.init=true; return; }
+    const coh0=compassCoherence();
+    if(S.compass!=null && coh0>0.97){ S.heading=compassHeading(); k.P=50/coh0; k.init=true; return; }
     return;
   }
+  /* --- Prédiction : cap constant, incertitude croît avec l'arrêt --- */
   const stoppedMs=Date.now()-(S.lastMoveTs||0);
-  const ch = S.compass!=null ? compassHeading() : null;
-  if(S.gpsBearing!=null && stoppedMs<45000){
-    // arrêt court : cap GPS conservé, sauf pivot franc détecté par une boussole stable
-    if(ch!=null && compassStable() && S.heading!=null && Math.abs(angleDiff(ch,S.heading))>30){
-      S.heading=(S.heading + angleDiff(ch,S.heading)*0.25 + 720)%360;
+  const Q=(S.speed||0)>2.5 ? 0.6            // roulage : mesures GPS en continu
+         : stoppedMs<45000 ? 2.0            // feu rouge : moto immobile
+         : 8;                                // arrêt prolongé : moto peut être déplacée
+  k.P+=Q;
+  /* --- Mesure 1 : cap GPS (précis d'autant plus qu'on roule vite) --- */
+  if(S.gpsBearing!=null && (S.speed||0)>2.2){
+    const R=6 + 60/(1+(S.speed/3));         // ≈ σ 8° à 8 km/h, σ 2.7° à 55 km/h
+    kalmanUpdate((S.gpsBearing+360)%360, R);
+  }
+  /* --- Mesure 2 : boussole — variance liée à sa cohérence --- */
+  if(S.compass!=null){
+    const coh=compassCoherence();
+    if(coh>0.75){                            // en dessous : magnétomètre écarté d'office
+      const R=4 + 500*(1-coh)*(1-coh);       // coh .99 → σ≈2° ; coh .8 → σ≈5°
+      kalmanUpdate(compassHeading(), R);
     }
-    return;
   }
-  if(ch!=null && compassStable()){
-    // boussole lissée (pas de sauts brusques)
-    S.heading = S.heading==null ? ch
-              : (S.heading + angleDiff(ch,S.heading)*0.25 + 720)%360;
-  }
-  // sinon on garde le dernier cap connu (magnétomètre dans les choux → silence)
+  if(k.P>2000) k.P=2000;                     // garde-fou
 }
 
 /* =========================================================================
@@ -899,7 +929,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.33 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.34 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Alerte principale
   if(S.mode==="idle"){ return; }
