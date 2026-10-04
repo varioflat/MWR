@@ -75,6 +75,7 @@
 </div>
 
 <div id="speedBottom" style="position:fixed;left:14px;bottom:calc(env(safe-area-inset-bottom,0px) + 18px);font-size:15px;font-weight:700;color:#e8eef5;opacity:.9;z-index:5;font-variant-numeric:tabular-nums;"></div>
+<div id="telemetry" style="position:fixed;left:14px;bottom:calc(env(safe-area-inset-bottom,0px) + 44px);font:700 13px monospace;color:#9fe8c0;opacity:.85;z-index:5;font-variant-numeric:tabular-nums;line-height:1.5;"></div>
 
 <div id="demoBadge" class="hidden">MODE DÉMO — données simulées</div>
 
@@ -131,6 +132,8 @@ const S = {
   compassOffset: 0,          // calibration boussole vs GPS
   compassSamples: [],        // dernières mesures brutes du magnétomètre
   kalman: {P: 400, init: false},   // filtre de Kalman 1D sur le cap
+  orient: {beta: 0, gamma: 0, have: false},   // assiette téléphone (moto penchée)
+  motion: {ax: 0, ay: 0, az: 0, have: false},// accéléromètre (G latéraux)
   lastMoveTs: 0,             // dernier instant de déplacement effectif (ms)
   heading: null,             // cap fusionné (deg, 0=Nord)
   voice: true,
@@ -539,6 +542,10 @@ function startCompass(){
       if(S.compassSamples.length>12) S.compassSamples.shift();
       fuseHeading();
     }
+    /* Inclinaison du téléphone = assiette de la moto (support solidaire) */
+    if(e.beta!=null || e.gamma!=null){
+      S.orient.beta=e.beta||0; S.orient.gamma=e.gamma||0; S.orient.have=true;
+    }
   };
   if(typeof DOE.requestPermission==="function"){
     DOE.requestPermission().then(st=>{ if(st==="granted")
@@ -548,6 +555,52 @@ function startCompass(){
     window.addEventListener("deviceorientation",handler,true);
     compassWatch=true;
   }
+}
+/* Accéléromètre : G ressentis (latéral / longitudinal), pour la télémétrie */
+let motionWatch=false;
+function startMotion(){
+  if(motionWatch || !window.DeviceMotionEvent) return;
+  window.addEventListener("devicemotion", e=>{
+    const g=e.accelerationIncludingGravity;
+    if(!g || g.x==null) return;
+    S.motion.ax=g.x; S.motion.ay=g.y; S.motion.az=g.z; S.motion.have=true;
+  }, true);
+  motionWatch=true;
+}
+/* Angle d'écran (0/90/180/270) — la correspondance axes téléphone/moto
+   dépend de l'orientation ET du montage. base 0 = téléphone paysage
+   « naturel » (boutons à droite), posé sur la bulle. */
+function screenAngle(){
+  const so=screen.orientation;
+  if(so && so.angle!=null) return (so.angle+360)%360;
+  return ((window.orientation||0)+360)%360;
+}
+/* Angle de PRISSE DE CORNE (roll moto) à partir de l'orientation du téléphone,
+   selon son orientation écran. Le téléphone est solidaire de la moto :
+   son roll = inclinaison de la moto. */
+function leanAngle(){
+  if(!S.orient.have) return null;
+  const ang=screenAngle();
+  let l = (ang===90) ? S.orient.beta
+        : (ang===270) ? -S.orient.beta
+        : (ang===0) ? -S.orient.gamma
+        : S.orient.gamma;         // 180
+  return l;
+}
+/* G latéral (celui qui tient la moto en courbe) et longitudinal (frein/accél) */
+function latG(){
+  if(!S.motion.have) return null;
+  const ang=screenAngle();
+  const g = (ang===90) ? -S.motion.ax : (ang===270) ? S.motion.ax
+          : (ang===0)  ? -S.motion.ay : S.motion.ay;   // 0/180
+  return g/9.81;
+}
+function lonG(){
+  if(!S.motion.have) return null;
+  const ang=screenAngle();
+  const g = (ang===90 || ang===270) ? S.motion.ay
+          : (ang===0 || ang===180) ? -S.motion.ax : S.motion.ay;
+  return g/9.81;
 }
 /* ============================================================
    Fusion cap : KALMAN 1D sur l'angle (gestion du wrap via angleDiff).
@@ -607,8 +660,14 @@ function fuseHeading(){
   if(S.compass!=null){
     const coh=compassCoherence();
     if(coh>0.75){                            // en dessous : magnétomètre écarté d'office
-      const R=4 + 500*(1-coh)*(1-coh);       // coh .99 → σ≈2° ; coh .8 → σ≈5°
-      kalmanUpdate(compassHeading(), R);
+  /* Boussole décrédibilisée quand le téléphone penche (compensation d'assiette
+     absente : une forte inclinaison = capteur hors de son plan de validité) */
+  let Rcompass = 4 + 500*(1-coh)*(1-coh);    // coh .99 → σ≈2° ; coh .8 → σ≈5°
+  if(S.orient.have){
+    const tilt=Math.max(Math.abs(S.orient.beta),Math.abs(S.orient.gamma));
+    if(tilt>25) Rcompass *= 1 + Math.min((tilt-25)/25*4, 8);  // jusqu'à ×9 à 65°
+  }
+  kalmanUpdate(compassHeading(), Rcompass);
     }
   }
   if(k.P>2000) k.P=2000;                     // garde-fou
@@ -929,8 +988,19 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.34 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.35 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
+  // Télémétrie pilotage : angle de corne + G (affichés en colonne gauche)
+  if(S.mode==="gps"){
+    const l=leanAngle(), lg=latG(), lng=lonG();
+    let t="";
+    if(l!=null) t += "𝜃 "+(l<0?"−":"+")+Math.abs(l).toFixed(0)+"°";
+    if(lg!=null) t += (t?"<br>":"")+"→ "+lg.toFixed(2)+" G";
+    if(lng!=null) t += (t?"<br>":"")+(lng>=0?"↑ ":"↓ ")+Math.abs(lng).toFixed(2)+" G";
+    $("telemetry").innerHTML=t;
+  }else{
+    $("telemetry").innerHTML="";
+  }
   // Alerte principale
   if(S.mode==="idle"){ return; }
   if(!S.pos){ setAlert("EN ATTENTE","Recherche du signal GPS…","idle"); return; }
@@ -1069,7 +1139,7 @@ $("btnDemo").onclick =()=>enterDemo("");
 async function startGuidage(){
   $("startOverlay").classList.add("hidden");
   $("btnStart").textContent="● MWR";
-  startGps(); startCompass(); fetchFrames();
+  startGps(); startCompass(); startMotion(); fetchFrames();
   // Garder l'écran allumé (casque + guidon)
   keepAwake();
   maybeAnalyse(true);
