@@ -694,7 +694,7 @@ function drawScope(){
     ctx.beginPath(); ctx.arc(cx,cy,r,-Math.PI/2+rad(GAP),-Math.PI/2+rad(SCOPE_HALF)); ctx.stroke();
     const prevBase=ctx.textBaseline;
     ctx.textBaseline="middle";
-    ctx.fillText(km+" km",cx,cy-r);
+    ctx.fillText(String(km),cx,cy-r);
     ctx.textBaseline=prevBase;
   }
   // graduations angulaires tous les 10°
@@ -867,7 +867,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.28 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.29 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Alerte principale
   if(S.mode==="idle"){ return; }
