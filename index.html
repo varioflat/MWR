@@ -75,7 +75,7 @@
 </div>
 
 <div id="speedBottom" style="position:fixed;left:14px;bottom:calc(env(safe-area-inset-bottom,0px) + 18px);font-size:15px;font-weight:700;color:#e8eef5;opacity:.9;z-index:5;font-variant-numeric:tabular-nums;"></div>
-<div id="telemetry" style="position:fixed;left:14px;bottom:calc(env(safe-area-inset-bottom,0px) + 44px);font:700 13px monospace;color:#9fe8c0;opacity:.85;z-index:5;font-variant-numeric:tabular-nums;line-height:1.5;"></div>
+<div id="telemetry" style="position:fixed;left:14px;bottom:calc(env(safe-area-inset-bottom,0px) + 44px);font:700 26px monospace;color:#9fe8c0;opacity:.9;z-index:5;font-variant-numeric:tabular-nums;line-height:1.25;"></div>
 
 <div id="demoBadge" class="hidden">MODE DÉMO — données simulées</div>
 
@@ -133,7 +133,8 @@ const S = {
   compassSamples: [],        // dernières mesures brutes du magnétomètre
   kalman: {P: 400, init: false},   // filtre de Kalman 1D sur le cap
   orient: {alpha: null, beta: 0, gamma: 0, have: false, sawAbsolute: false},  // attitude Euler W3C du téléphone
-  motion: {ax: 0, ay: 0, az: 0, have: false},// accéléromètre (G latéraux)
+  motion: {ax: 0, ay: 0, az: 0, have: false, lastT: 0},// accéléromètre (G latéraux)
+  lean: {have: false, v: 0},                 // roulis FUSION gyro+gravité (deg)
   lastMoveTs: 0,             // dernier instant de déplacement effectif (ms)
   heading: null,             // cap fusionné (deg, 0=Nord)
   voice: true,
@@ -568,14 +569,44 @@ function startCompass(){
     compassWatch=true;
   }
 }
-/* Accéléromètre : G ressentis (latéral / longitudinal), pour la télémétrie */
-let motionWatch=false;
+/* Accéléromètre + GYROMÈTRE.
+   Roulis par dead-reckoning gyro : on intègre la vitesse de rotation autour
+   de l'axe « avant » (haut du contenu). En virage stabilisé, l'attitude
+   gravitaire retourne à 0 (équilibre des forces) alors que la moto est
+   penchée : le maintien du roulis vient donc du gyro pur tant que la
+   rotation de lacet dure (turning = rotation autour de la verticale moto).
+   Hors virage, on rappelle doucement vers l'Euler (qui redevient vrai). */
 function startMotion(){
   if(motionWatch || !window.DeviceMotionEvent) return;
   window.addEventListener("devicemotion", e=>{
     const g=e.accelerationIncludingGravity;
     if(!g || g.x==null) return;
     S.motion.ax=g.x; S.motion.ay=g.y; S.motion.az=g.z; S.motion.have=true;
+    const rr=e.rotationRate;
+    if(!rr || rr.alpha==null) return;
+    const t=performance.now();
+    const dt=S.motion.lastT? Math.min((t-S.motion.lastT)/1000, 0.1) : 0;
+    S.motion.lastT=t;
+    if(dt<=0) return;
+    const ang=screenAngle();
+    /* Vitesse de roulis : rotation autour de l'axe avant (haut du contenu) */
+    const rollRate = (ang===90) ? -(rr.alpha||0) : (ang===270) ? (rr.alpha||0)
+                   : (ang===0) ?  (rr.beta||0)  : -(rr.beta||0);
+    /* Rotation autour de la verticale moto (≈ axe « droite du contenu ») :
+       en courbe, c'est le lacet — l'indicateur fiable qu'on est EN virage */
+    const turnRate = (ang===90 || ang===270) ? Math.abs(rr.beta||0)
+                                              : Math.abs(rr.alpha||0);
+    const turning = turnRate > 5;             // > 5°/s de lacet = en courbe
+    if(turning){
+      S.lean.v += rollRate*dt;                // dead-reckoning pur
+      if(S.lean.v>70) S.lean.v=70;             // garde-fous physiques
+      if(S.lean.v<-70) S.lean.v=-70;
+    }else{
+      const el=eulerLean();
+      S.lean.v = el!=null ? S.lean.v*0.94 + el*0.06   // recalage doux
+                          : S.lean.v*0.94;            // retour à 0
+    }
+    S.lean.have=true;
   }, true);
   motionWatch=true;
 }
@@ -590,14 +621,21 @@ function screenAngle(){
 /* Angle de PRISSE DE CORNE (roll moto) à partir de l'orientation du téléphone,
    selon son orientation écran. Le téléphone est solidaire de la moto :
    son roll = inclinaison de la moto. */
-function leanAngle(){
+/* Roulis Euler (attitude gravitaire seule) — MENT en courbe stabilisée :
+   la résultante gravité+centrifuge s'aligne sur la verticale de la moto,
+   l'accéléromètre croit la moto droite. Servira de référence hors virage. */
+function eulerLean(){
   if(!S.orient.have) return null;
   const ang=screenAngle();
   let l = (ang===90) ? S.orient.beta
         : (ang===270) ? -S.orient.beta
         : (ang===0) ? -S.orient.gamma
-        : S.orient.gamma;         // 180
+        : S.orient.gamma;
   return l;
+}
+/* Roulis affiché : fusion gyro/gravité dès que le gyro est disponible */
+function leanAngle(){
+  return S.lean.have ? S.lean.v : eulerLean();
 }
 /* G latéral (celui qui tient la moto en courbe) et longitudinal (frein/accél) */
 function latG(){
@@ -1025,7 +1063,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.38 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.39 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Télémétrie pilotage : angle de corne + G (affichés en colonne gauche)
   if(S.mode==="gps"){
