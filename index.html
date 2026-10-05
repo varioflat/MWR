@@ -589,13 +589,23 @@ function startMotion(){
     S.motion.lastT=t;
     if(dt<=0) return;
     const ang=screenAngle();
-    /* Vitesse de roulis : rotation autour de l'axe avant (haut du contenu) */
-    const rollRate = (ang===90) ? -(rr.alpha||0) : (ang===270) ? (rr.alpha||0)
-                   : (ang===0) ?  (rr.beta||0)  : -(rr.beta||0);
-    /* Rotation autour de la verticale moto (≈ axe « droite du contenu ») :
-       en courbe, c'est le lacet — l'indicateur fiable qu'on est EN virage */
-    const turnRate = (ang===90 || ang===270) ? Math.abs(rr.beta||0)
-                                              : Math.abs(rr.alpha||0);
+    /* Vitesse de ROULIS : rotation autour de l'axe « avant » = HAUT DU CONTENU.
+       Repère device (W3C) : rotationRate.alpha = autour de z (perpend. écran),
+       beta = autour de x, gamma = autour de y.
+       - Portrait (0/180) : l'avant = ±y device → rotation autour de y = gamma ? NON :
+         rotation autour de l'axe y device = gamma… mais gamma mesure la rotation
+         AUTOUR de y, et roulis = rotation autour de l'avant.
+       Mapping correct :
+       - Portrait 0 : avant = +y → roulis = rotation autour de y = -gamma
+       - Portrait 180 : avant = -y → roulis = gamma
+       - Paysage 90 : avant = -x → roulis = rotation autour de x = beta
+       - Paysage 270 : avant = +x → roulis = -beta
+       Lacet (verticale moto ≈ z device en montage bulle vertical) : ±alpha. */
+    let rollRate, turnRate;
+    if(ang===0)       { rollRate=-(rr.gamma||0); turnRate=Math.abs(rr.alpha||0); }
+    else if(ang===180){ rollRate= (rr.gamma||0); turnRate=Math.abs(rr.alpha||0); }
+    else if(ang===90) { rollRate= (rr.beta||0);  turnRate=Math.abs(rr.alpha||0); }
+    else              { rollRate=-(rr.beta||0);  turnRate=Math.abs(rr.alpha||0); }
     const turning = turnRate > 5;             // > 5°/s de lacet = en courbe
     if(turning){
       S.lean.v += rollRate*dt;                // dead-reckoning pur
@@ -1063,7 +1073,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.39 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.40 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Télémétrie pilotage : angle de corne + G (affichés en colonne gauche)
   if(S.mode==="gps"){
