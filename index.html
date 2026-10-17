@@ -643,17 +643,32 @@ function bikeAxes(){
   }
   return {U:U, F:F};
 }
-/* Roulis Euler (attitude gravitaire seule) — MENT en courbe stabilisée :
-   la résultante gravité+centrifuge s'aligne sur la verticale de la moto,
-   l'accéléromètre croit la moto droite. Servira de référence hors virage. */
+/* Roulis de RÉFÉRENCE (recalage) — 100 % ACCÉLÉROMÈTRIQUE, plus AUCUN angle
+   d'Euler (gamma wrappe en ±180° téléphone debout → inversions +180/−180).
+   Montage rigide : F (avant) = constante du montage ; up0 = axe « haut du
+   contenu » (constante). Le roulis = angle signé de U (force spécifique,
+   projetée ⊥F) autour de F depuis up0. À l'arrêt U = verticale monde ;
+   en courbe stabilisée U = up MOTO (équilibre des forces) — dans tous les
+   régimes permanents cette lecture donne le VRAI roulis (le « mensonge »
+   de l'accéléromètre n'existe que si l'on recale la verticale dessus ;
+   ici on mesure l'angle de la force, pas une verticale supposée). */
 function eulerLean(){
-  if(!S.orient.have) return null;
+  if(!S.motion.have) return null;
+  const ba=bikeAxes(); if(!ba) return null;
+  const F=ba.F, U=ba.U;
   const ang=screenAngle();
-  let l = (ang===90) ? S.orient.beta
-        : (ang===270) ? -S.orient.beta
-        : (ang===0) ? -S.orient.gamma
-        : S.orient.gamma;
-  return l;
+  const up0 = ang===90? [-1,0,0] : ang===180? [0,-1,0] : ang===270? [1,0,0] : [0,1,0];
+  const dF = up0[0]*F[0]+up0[1]*F[1]+up0[2]*F[2];
+  let p=[up0[0]-dF*F[0], up0[1]-dF*F[1], up0[2]-dF*F[2]];
+  const np=Math.hypot(p[0],p[1],p[2]); if(np<0.5) return null;
+  p=[p[0]/np, p[1]/np, p[2]/np];
+  const right0=[F[1]*p[2]-F[2]*p[1], F[2]*p[0]-F[0]*p[2], F[0]*p[1]-F[1]*p[0]]; // F×p
+  const dU = U[0]*F[0]+U[1]*F[1]+U[2]*F[2];
+  let q=[U[0]-dU*F[0], U[1]-dU*F[1], U[2]-dU*F[2]];
+  const nq=Math.hypot(q[0],q[1],q[2]); if(nq<0.3) return null;
+  q=[q[0]/nq, q[1]/nq, q[2]/nq];
+  return -(Math.atan2(q[0]*right0[0]+q[1]*right0[1]+q[2]*right0[2],
+                     q[0]*p[0]+q[1]*p[1]+q[2]*p[2])*180/Math.PI);   // droite = +
 }
 /* Roulis affiché : fusion gyro/gravité dès que le gyro est disponible */
 function leanAngle(){
@@ -1079,7 +1094,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.41 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.42 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Télémétrie pilotage : angle de corne + G (affichés en colonne gauche)
   if(S.mode==="gps"){
