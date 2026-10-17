@@ -588,24 +588,14 @@ function startMotion(){
     const dt=S.motion.lastT? Math.min((t-S.motion.lastT)/1000, 0.1) : 0;
     S.motion.lastT=t;
     if(dt<=0) return;
-    const ang=screenAngle();
-    /* Vitesse de ROULIS : rotation autour de l'axe « avant » = HAUT DU CONTENU.
-       Repère device (W3C) : rotationRate.alpha = autour de z (perpend. écran),
-       beta = autour de x, gamma = autour de y.
-       - Portrait (0/180) : l'avant = ±y device → rotation autour de y = gamma ? NON :
-         rotation autour de l'axe y device = gamma… mais gamma mesure la rotation
-         AUTOUR de y, et roulis = rotation autour de l'avant.
-       Mapping correct :
-       - Portrait 0 : avant = +y → roulis = rotation autour de y = -gamma
-       - Portrait 180 : avant = -y → roulis = gamma
-       - Paysage 90 : avant = -x → roulis = rotation autour de x = beta
-       - Paysage 270 : avant = +x → roulis = -beta
-       Lacet (verticale moto ≈ z device en montage bulle vertical) : ±alpha. */
-    let rollRate, turnRate;
-    if(ang===0)       { rollRate=-(rr.gamma||0); turnRate=Math.abs(rr.alpha||0); }
-    else if(ang===180){ rollRate= (rr.gamma||0); turnRate=Math.abs(rr.alpha||0); }
-    else if(ang===90) { rollRate= (rr.beta||0);  turnRate=Math.abs(rr.alpha||0); }
-    else              { rollRate=-(rr.beta||0);  turnRate=Math.abs(rr.alpha||0); }
+    const ba=bikeAxes();
+    if(!ba) return;
+    /* ω device = (β autour de x, γ autour de y, α autour de z) [deg/s].
+       ROULIS = rotation autour de l'AVANT moto (F) ; LACET = autour du
+       HAUT moto (U) — axes gravité, indépendants de l'orientation OS. */
+    const om=[rr.beta||0, rr.gamma||0, rr.alpha||0];
+    const rollRate = -(ba.F[0]*om[0] + ba.F[1]*om[1] + ba.F[2]*om[2]);
+    const turnRate  = Math.abs(ba.U[0]*om[0] + ba.U[1]*om[1] + ba.U[2]*om[2]);
     const turning = turnRate > 5;             // > 5°/s de lacet = en courbe
     if(turning){
       S.lean.v += rollRate*dt;                // dead-reckoning pur
@@ -628,9 +618,31 @@ function screenAngle(){
   if(so && so.angle!=null) return (so.angle+360)%360;
   return ((window.orientation||0)+360)%360;
 }
-/* Angle de PRISSE DE CORNE (roll moto) à partir de l'orientation du téléphone,
-   selon son orientation écran. Le téléphone est solidaire de la moto :
-   son roll = inclinaison de la moto. */
+/* Axes MOTO en repère TÉLÉPHONE, dérivés de la GRAVITÉ (jamais de l'OS :
+   le verrouillage de rotation fait mentir screen.orientation, et le
+   téléphone monté en PAYSAGE sur la bulle affiche du portrait…).
+   U = haut de la moto = direction de la force spécifique (accéléromètre).
+   F = AVANT de la moto : écran ~vertical (montage bulle) → normale écran -z
+   (l'écran fait face au pilote) ; écran ~plat → axe « haut du contenu » OS.
+   R = latéral = F × U. */
+function bikeAxes(){
+  if(!S.motion.have) return null;
+  const m=Math.hypot(S.motion.ax,S.motion.ay,S.motion.az);
+  if(m<3) return null;                      // gravité inexploitable (choc, chute libre)
+  const U=[S.motion.ax/m, S.motion.ay/m, S.motion.az/m];
+  const pn=Math.hypot(U[0],U[1]);           // composante de U dans le plan écran
+  let F;
+  if(pn>0.25){
+    const rx=U[1]/pn, ry=-U[0]/pn;          // R : horizontal dans le plan écran
+    F=[-U[2]*ry, U[2]*rx, U[0]*ry-U[1]*rx]; // F = U × R
+  }else{
+    const ang=screenAngle();                // écran plat : haut du contenu
+    let ux=0,uy=1;
+    if(ang===90){ux=-1;uy=0;} else if(ang===180){ux=0;uy=-1;} else if(ang===270){ux=1;uy=0;}
+    F=[ux,uy,0];
+  }
+  return {U:U, F:F};
+}
 /* Roulis Euler (attitude gravitaire seule) — MENT en courbe stabilisée :
    la résultante gravité+centrifuge s'aligne sur la verticale de la moto,
    l'accéléromètre croit la moto droite. Servira de référence hors virage. */
@@ -647,20 +659,18 @@ function eulerLean(){
 function leanAngle(){
   return S.lean.have ? S.lean.v : eulerLean();
 }
-/* G latéral (celui qui tient la moto en courbe) et longitudinal (frein/accél) */
+/* G latéral / longitudinal : projections de la force spécifique sur les axes
+   MOTO (R, F). F et R ⊥ U par construction → AUCUNE fuite de gravité :
+   à l'arrêt latG=lonG=0, quelle que soit l'orientation du téléphone. */
 function latG(){
-  if(!S.motion.have) return null;
-  const ang=screenAngle();
-  const g = (ang===90) ? -S.motion.ax : (ang===270) ? S.motion.ax
-          : (ang===0)  ? -S.motion.ay : S.motion.ay;   // 0/180
-  return g/9.81;
+  const ba=bikeAxes(); if(!ba) return null;
+  const F=ba.F, U=ba.U;
+  const rx=F[1]*U[2]-F[2]*U[1], ry=F[2]*U[0]-F[0]*U[2];   // R = F × U (dans le plan)
+  return (rx*S.motion.ax + ry*S.motion.ay)/9.81;
 }
 function lonG(){
-  if(!S.motion.have) return null;
-  const ang=screenAngle();
-  const g = (ang===90 || ang===270) ? S.motion.ay
-          : (ang===0 || ang===180) ? -S.motion.ax : S.motion.ay;
-  return g/9.81;
+  const ba=bikeAxes(); if(!ba) return null;
+  return (ba.F[0]*S.motion.ax + ba.F[1]*S.motion.ay + ba.F[2]*S.motion.az)/9.81;
 }
 /* ============================================================
    Fusion cap : KALMAN 1D sur l'angle (gestion du wrap via angleDiff).
@@ -680,32 +690,28 @@ function lonG(){
    pivot suivi à l'arrêt, cap figé mais juste au feu rouge.
    ============================================================ */
 function compassHeading(){ return (S.compass + S.compassOffset + 720)%360; }
-/* Cap À COMPENSATION D'ASSIETTE : projection de l'axe « haut de l'écran »
-   dans le plan horizontal terrestre, à partir de l'attitude Euler W3C
-   (alpha,beta,gamma) du capteur ABSOLU (fusion gravité+magnétomètre côté
-   Android : la composante verticale du champ est déjà traitée par le
-   capteur). L'axe projeté dépend de l'orientation ÉCRAN (portrait/
-   paysage) : c'est TOUJOURS le haut du contenu qui donne le cap.
-   Retourne null si l'axe écran est quasi vertical (téléphone à plat) :
-   cap indéterminé, pas faux. */
+/* Cap À COMPENSATION D'ASSIETTE : projection de l'axe AVANT MOTO (F, dérivé
+   de la gravité) dans le plan horizontal terrestre, à partir de l'attitude
+   Euler W3C (alpha,beta,gamma) du capteur ABSOLU (fusion gravité+magnétomètre
+   côté Android). Indépendant de l'orientation écran/portrait/paysage et du
+   verrouillage de rotation : les axes viennent de la gravité, pas de l'OS.
+   Retourne null si l'attitude est incohérente (avant quasi vertical). */
 function tiltCompHeading(){
   if(S.orient.alpha==null) return null;
+  const ba=bikeAxes(); if(!ba) return null;
   const a=rad(S.orient.alpha), b=rad(S.orient.beta||0), g=rad(S.orient.gamma||0);
-  /* axe « haut du contenu » en repère téléphone, selon la rotation écran */
-  const ang=screenAngle();
-  let ux=0, uy=1;
-  if(ang===90){ ux=-1; uy=0; } else if(ang===180){ ux=0; uy=-1; } else if(ang===270){ ux=1; uy=0; }
-  /* u_world = R^T · u_dev  avec R = Rz(a)·Rx(b)·Ry(g)  (W3C)
-     → u_world = Rz(-a)·Rx(-b)·Ry(-g)·u_dev ; repère monde : X=Est, Y=Nord, Z=haut */
-  let x=Math.cos(-a)*ux - Math.sin(-a)*uy;
-  let y=Math.sin(-a)*ux + Math.cos(-a)*uy;
-  const cb=Math.cos(b), sb=Math.sin(b);
-  const y2= cb*y + sb*0, z2=-sb*y + cb*0;      // Rx(-b)
+  const v=ba.F;                                 // avant moto en repère device
+  /* v_world = R · v_dev, R = Rz(α)·Rx(β)·Ry(γ) (device→terre, W3C).
+     À plat : redonne cap = 360−α (validé). Debout : cap linéaire en −(α+γ),
+     NON dégénéré (le R^T inverse figeait le cap à 180° — faux OK à plat). */
   const cg=Math.cos(g), sg=Math.sin(g);
-  const x3= cg*x - sg*z2, z3= sg*x + cg*z2;     // Ry(-g)
-  const horiz=Math.hypot(x3,y2);                // composante horizontale de l'axe
-  if(horiz<0.3) return null;                    // axe écran vertical → cap indéterminé
-  return (Math.atan2(-x3,y2)*180/Math.PI + 360)%360;
+  const x1= v[0]*cg + v[2]*sg, y1=v[1], z1=-v[0]*sg + v[2]*cg;   // Ry(γ)
+  const cb=Math.cos(b), sb=Math.sin(b);
+  const y2= y1*cb - z1*sb, z2= y1*sb + z1*cb;                     // Rx(β)
+  const ca=Math.cos(a), sa=Math.sin(a);
+  const x3= x1*ca - y2*sa, y3= x1*sa + y2*ca;                     // Rz(α)
+  if(z2>0.9 || z2<-0.9) return null;             // avant quasi vertical → aberrant
+  return (Math.atan2(x3,y3)*180/Math.PI + 360)%360;   // atan2(Est, Nord)
 }
 function compassCoherence(){
   const s=S.compassSamples.slice(-8);
@@ -1073,7 +1079,7 @@ function updateHud(){
   const spdKmh=Math.round((S.speed||0)*3.6);
   const capTxt=S.heading!=null? "cap "+String(Math.round(S.heading)).padStart(3,"0")+"°" : "cap ?";
   const fix=S.pos? "GPS ±"+Math.round(S.pos.acc||0)+" m" : "GPS —";
-  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.40 • z"+S.center.zoom;
+  $("stLeft").textContent = (S.mode==="gps" ? fix+" • "+capTxt : (S.mode==="demo"?"simulation • "+capTxt:"—")) + " • v2.41 • z"+S.center.zoom;
   $("speedBottom").textContent = spdKmh>0? spdKmh+" km/h" : "";
   // Télémétrie pilotage : angle de corne + G (affichés en colonne gauche)
   if(S.mode==="gps"){
@@ -1251,6 +1257,10 @@ $("btnStart").onclick=startGuidage;
 
 /* Rafraîchissement périodique de l'analyse */
 setInterval(()=>maybeAnalyse(true), 8000);
+/* Re-fetch des trames radar RainViewer toutes les 5 min : la source publie
+   un nouveau jeu (passé+nowcast) toutes les ~10 min — sans ça, une longue
+   sortie roulait sur des données figées à l'heure de départ. */
+setInterval(()=>{ fetchFrames().catch(()=>{}); }, 300000);
 
 /* ---------- PWA : installation plein écran + démarrage hors-ligne ---------- */
 if("serviceWorker" in navigator){
